@@ -30,6 +30,8 @@ test_loader = torch.utils.data.DataLoader(
     dataset=test_set, batch_size=batch_size, shuffle=False
 )
 
+PATH = './cifar_net.pth'
+
 
 class ResBlockConv3(nn.Module):
     def __init__(self, in_channels, out_channels, stride=1):
@@ -59,78 +61,59 @@ class ResBlockConv3(nn.Module):
         return out
 
 
-class ResNet(nn.Module):
+class Res110Net(nn.Module):
     def __init__(self, in_channels: int, num_classes: int = 10):
-        super(ResNet, self).__init__()
+        super(Res110Net, self).__init__()
         self.conv1 = nn.Conv2d(
-            in_channels=in_channels, out_channels=64, kernel_size=7, stride=2, padding=3
+            in_channels=in_channels, out_channels=16, kernel_size=3, padding=1
         )
-        self.bn1 = nn.BatchNorm2d(num_features=64)
+        self.bn1 = nn.BatchNorm2d(num_features=16)
         self.relu = nn.ReLU(inplace=True)
-        self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
 
-        self.resblock64_1 = ResBlockConv3(in_channels=64, out_channels=64)
-        self.resblock64_2 = ResBlockConv3(in_channels=64, out_channels=64)
-        self.resblock64_3 = ResBlockConv3(in_channels=64, out_channels=64)
+        self.resblock16 = [ResBlockConv3(in_channels=16, out_channels=16) for _ in range(32)]
+        self.resblock16 = nn.ModuleList(self.resblock16)
 
-        self.resblock128_1 = ResBlockConv3(in_channels=64, out_channels=128, stride=2)
-        self.resblock128_2 = ResBlockConv3(in_channels=128, out_channels=128)
-        self.resblock128_3 = ResBlockConv3(in_channels=128, out_channels=128)
-        self.resblock128_4 = ResBlockConv3(in_channels=128, out_channels=128)
+        self.resblock32_1 = ResBlockConv3(in_channels=16, out_channels=32, stride=2)
+        self.resblock32_2 = [ResBlockConv3(in_channels=32, out_channels=32) for _ in range(31)]
+        self.resblock32_2 = nn.ModuleList(self.resblock32_2)
 
-        self.resblock256_1 = ResBlockConv3(in_channels=128, out_channels=256, stride=2)
-        self.resblock256_2 = ResBlockConv3(in_channels=256, out_channels=256)
-        self.resblock256_3 = ResBlockConv3(in_channels=256, out_channels=256)
-        self.resblock256_4 = ResBlockConv3(in_channels=256, out_channels=256)
-        self.resblock256_5 = ResBlockConv3(in_channels=256, out_channels=256)
-        self.resblock256_6 = ResBlockConv3(in_channels=256, out_channels=256)
-
-        self.resblock512_1 = ResBlockConv3(in_channels=256, out_channels=512, stride=2)
-        self.resblock512_2 = ResBlockConv3(in_channels=512, out_channels=512)
-        self.resblock512_3 = ResBlockConv3(in_channels=512, out_channels=512)
-
+        self.resblock64_1 = ResBlockConv3(in_channels=32, out_channels=64, stride=2)
+        self.resblock64_2 = [ResBlockConv3(in_channels=64, out_channels=64) for _ in range(31)]
+        self.resblock64_2 = nn.ModuleList(self.resblock64_2)
+        
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
-        self.fc = nn.Linear(in_features=512, out_features=num_classes)
+        self.fc = nn.Linear(in_features=64, out_features=num_classes)
 
     def forward(self, x):
         x = self.conv1(x)
         x = self.relu(self.bn1(x))
-        x = self.maxpool(x)
-
+        # print(x.shape)
+        for i in range(32):
+            x = self.resblock16[i](x)
+        # print(x.shape)
+        x = self.resblock32_1(x)
+        for i in range(31):
+            x = self.resblock32_2[i](x)
+        # print(x.shape)
         x = self.resblock64_1(x)
-        x = self.resblock64_2(x)
-        x = self.resblock64_3(x)
-
-        x = self.resblock128_1(x)
-        x = self.resblock128_2(x)
-        x = self.resblock128_3(x)
-        x = self.resblock128_4(x)
-
-        x = self.resblock256_1(x)
-        x = self.resblock256_2(x)
-        x = self.resblock256_3(x)
-        x = self.resblock256_4(x)
-        x = self.resblock256_5(x)
-        x = self.resblock256_6(x)
-
-        x = self.resblock512_1(x)
-        x = self.resblock512_2(x)
-        x = self.resblock512_3(x)
+        for i in range(31):
+            x = self.resblock64_2[i](x)
+        # print(x.shape)
         x = self.avgpool(x)
-        print(x.shape)
+        # print(x.shape)
         x = x.view(x.size(0), -1)
-        print(x.shape)
+        # print(x.shape)
         x = self.fc(x)
         return F.log_softmax(x, dim=1)
 
 
-model = ResNet(in_channels=3)
+model = Res110Net(in_channels=3)
 model.to(device)
 
-optimizer = optim.SGD(model.parameters(), lr=0.01, momentum=0.5)
 
 
-def train(epoch):
+
+def train(epoch, optimizer, model):
     model.train()
     for batch_idx, (data, target) in enumerate(train_loader):
         data, target = Variable(data), Variable(target)
@@ -140,7 +123,7 @@ def train(epoch):
         loss = F.nll_loss(output, target)
         loss.backward()
         optimizer.step()
-        if batch_idx % 10 == 0:
+        if batch_idx % 30 == 0:
             print(
                 "Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}".format(
                     epoch,
@@ -152,7 +135,7 @@ def train(epoch):
             )
 
 
-def test():
+def test(model):
     model.eval()
     test_loss = 0
     correct = 0
@@ -177,6 +160,24 @@ def test():
     )
 
 
-for epoch in range(1, 10):
-    train(epoch)
-    test()
+if __name__ == "__main__":
+    load_model = True
+    if load_model:
+        model.load_state_dict(torch.load(PATH))
+        test(model=model)
+    model = model
+    for epoch in range(1, 20):
+        optimizer = optim.SGD(model.parameters(), lr=0.01)
+        train(epoch, optimizer=optimizer, model=model)
+        test(model=model)
+        torch.save(model.state_dict(), PATH)
+    # for epoch in range(1, 30):
+    #     optimizer = optim.SGD(model.parameters(), lr=0.1, momentum=0.5)
+    #     train(epoch, optimizer=optimizer, model=model)
+    #     test(model=model)
+    #     torch.save(model.state_dict(), PATH)
+    # for epoch in range(1, 30):
+    #     optimizer = optim.SGD(model.parameters(), lr=0.01, momentum=0.5)
+    #     train(epoch, optimizer=optimizer, model=model)
+    #     test(model=model)
+    #     torch.save(model.state_dict(), PATH)
